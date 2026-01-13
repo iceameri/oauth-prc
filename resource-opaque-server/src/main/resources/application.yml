@@ -1,0 +1,37 @@
+server:
+  port: 9092
+
+spring:
+  application:
+    name: resource-opaque-server
+
+  main:
+    allow-bean-definition-overriding: true
+
+  security:
+    oauth2:
+      resourceserver:
+        opaquetoken:
+          client-id: opaque-client
+          client-secret: P@$$w0rd1!
+          introspection-uri: http://localhost:9090/oauth2/introspect # http://localhost:9090/introspect
+
+  datasource:
+    url: jdbc:sqlserver://localhost:1433;databaseName=resource;trustServerCertificate=true;encrypt=false
+    username: sa
+    password: P@$$w0rd1!
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 10
+
+  jpa:
+    database-platform: org.hibernate.dialect.SQLServerDialect
+    open-in-view: true
+    show-sql: true
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+        default_batch_fetch_size: 1000

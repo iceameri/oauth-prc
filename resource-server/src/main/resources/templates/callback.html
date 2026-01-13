@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>OAuth2 Callback</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f8f9fa;
+            margin: 40px;
+        }
+        .container {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin: auto;
+        }
+        h1 {
+            color: #333;
+        }
+        .code-box {
+            background-color: #e9ecef;
+            padding: 10px;
+            font-family: monospace;
+            border-radius: 5px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>OAuth2 인증 성공</h1>
+    <p>서버로부터 전달받은 Authorization Code는 다음과 같습니다:</p>
+    <div class="code-box" th:text="${authCode}">Authorization Code 표시 영역</div>
+</div>
+</body>
+</html>

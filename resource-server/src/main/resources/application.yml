@@ -1,0 +1,62 @@
+app:
+  locale:
+    language: "ko"
+    country: "KR"
+
+server:
+  port: 9091
+
+spring:
+  application:
+    name: resource-server
+  main:
+    allow-bean-definition-overriding: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9090 # or jwk-set-uri: http://localhost:9090/oauth2/jwks
+
+  datasource:
+    jdbc-url: jdbc:sqlserver://localhost:1433;databaseName=resource;trustServerCertificate=true;encrypt=false
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    username: sa
+    password: P@$$w0rd1!
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 10
+      data-source-class-name: resourceDataSource
+
+  jpa:
+    database-platform: org.hibernate.dialect.SQLServerDialect
+    open-in-view: true
+    show-sql: true
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+        default_batch_fetch_size: 1000
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.security.oauth2: DEBUG
+    org.springframework.security.oauth2.server.authorization: DEBUG
+    org.springframework.jdbc.core: DEBUG
+
+springdoc:
+  server-url: http://localhost:9091
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+    try-it-out-enabled: true
+#  paths-to-match: /api/v1/**  # 특정 패턴만 Swagger에 포함
+#  packages-to-scan: com.jw.api.controller  # 특정 패키지 내 컨트롤러만 포함
+---
+spring.config.activate.on-profile: local
