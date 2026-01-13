@@ -41,7 +41,31 @@ Spring Boot 3.5 + Gradle + JAVA 17 로 진행하였습니다.
    2) resource-server/src/main/java/com/jw/resourceserver/ResourceServerApplication.java
    3) resource-opaque-server/src/main/java/com/jw/resourceopaqueserver/ResourceOpaqueServerApplication.java
 
+### 기능 설명
+#### authorization-server
+- **OAuth 2.1 기반 토큰 발급**: Authorization Code, Refresh Token, Client Credentials 그랜트 타입 지원
+- **OIDC 지원**: OpenID Connect를 통한 사용자 인증 및 ID 토큰 발급
+- **토큰 관리 엔드포인트**:
+  - `JWKS` 공개 키 제공 (`/oauth2/jwks`)
+  - `Revocation`: 토큰 무효화 지원 (`/oauth2/revoke`)
+  - `Introspection`: 토큰 유효성 및 정보 검사 지원 (`/oauth2/introspect`)
+- **보안**: JDBC 기반의 클라이언트 및 토큰 관리, Custom UserDetailsService 구현
 
+#### resource-server
+- **JWT 기반 리소스 서버**: Authorization Server에서 발급한 JWT를 단독 검증하여 리소스 제공
+- **게시판 및 댓글 시스템**: 
+  - 게시판(Boards) 및 댓글(Comments) CRUD 구현
+  - 대댓글 지원 및 계층형 구조 관리
+  - **Soft Delete**: 데이터 보존 및 법적 검토 대응을 위한 논리 삭제 적용
+- **기술적 특징**:
+  - **Record DTO**: Java 17의 record를 활용하여 불변성 및 간결성 확보
+  - **JPA & MS SQL**: MS SQL Server를 사용하며, 감사 로그(BoardViewLogs) 기록 지원
+  - **Swagger UI**: API 문서 자동화 및 테스트 환경 제공
+
+#### resource-opaque-server
+- **Opaque Token 기반 리소스 서버**: 가독성이 없는 랜덤 문자열 토큰을 사용하여 보안성 강화
+- **토큰 검증**: Authorization Server의 `/introspect` 엔드포인트를 호출하여 실시간으로 토큰 유효성 확인 (Stateful 방식)
+- **보안성**: 중요한 정보를 토큰 내에 담지 않아 탈취 시에도 정보 노출 위험 최소화
 
 ### 사전 지식
 #### OAuth 2.0의 Opaque Token
@@ -90,8 +114,6 @@ jwt 토큰의 위험성은 토큰이 탈취당하고 만료시간까지 소멸�
 - 토큰 무효화(`/oauth2/revoke`)
 - 토큰 유효성 검사(`/oauth2/introspect`)
 
-
-
 ### 개선사항
 - Redis 캐시 적용(진행중)
   - Local Cache -> Global Cache -> DB 순으로 토큰 조회
@@ -103,8 +125,11 @@ jwt 토큰의 위험성은 토큰이 탈취당하고 만료시간까지 소멸�
   - authorization-server: 9090(변경사항 없음)
   - resource-server: 9100~9109
   - resource-opaque-server: 9110~9119
-- JPA-QueryDSL 적용
+- Resource-server JPA-QueryDSL 적용
+- application.yml 프로필 추가 및 Spring Cloud Config 기반 설정 관리
 
 ### 참고사항
-- 개인 프로젝트라서 feat 브랜치 작업 없이 master 브랜치로만 작업했습니다. 
-- 또한 같은 이유로 commit이 잘게 나누어 있습니다.
+- master 브랜치로만 작업했습니다. 
+- 개인 프로젝트라서 feat 브랜치 작업이 없습니다.
+- 또한 작업하는 commit 단위가 작업완료가 아닌 작업중인 commit이 포함됩니다.(맥북 -> 윈도우와 같이 OS가 다른 곳에서 작업하는 경우가 있습니다.)
+- ArchTest는 예시코드 따로 추가작업이 없습니다.
