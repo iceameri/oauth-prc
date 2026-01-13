@@ -1,5 +1,6 @@
 package com.jw.authorizationserver.config.userdetails;
 
+import com.jw.authorizationserver.constants.BeanNameConstants;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -13,7 +14,7 @@ public class UserDetailsRepository {
 
     private final JdbcTemplate oauthJdbcTemplate;
 
-    public UserDetailsRepository(@Qualifier("oauthJdbcTemplate") JdbcTemplate oauthJdbcTemplate) {
+    public UserDetailsRepository(@Qualifier(BeanNameConstants.OAUTH_JDBC_TEMPLATE) JdbcTemplate oauthJdbcTemplate) {
         this.oauthJdbcTemplate = oauthJdbcTemplate;
     }
 

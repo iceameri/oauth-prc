@@ -1,14 +1,17 @@
 package com.jw.authorizationserver.config;
 
+import com.jw.authorizationserver.constants.BeanNameConstants;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
+import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
-import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
 
@@ -17,22 +20,48 @@ import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
 @Service
-@RequiredArgsConstructor
-public class CustomOAuth2AuthorizationService implements OAuth2AuthorizationService {
+public class CustomOAuth2AuthorizationService extends JdbcOAuth2AuthorizationService {//JdbcOAuth2AuthorizationService
 
+    private final JdbcTemplate oauthJdbcTemplate;
     private final RedisTemplate<String, Object> redisTemplate;
     private final ObjectMapper objectMapper;
+    private final RegisteredClientRepository registeredClientRepository;
 
     private static final String AUTHORIZATION_KEY = "oauth2_authorization:";
+
+    public CustomOAuth2AuthorizationService(
+            @Qualifier(BeanNameConstants.OAUTH_JDBC_TEMPLATE) JdbcTemplate oauthJdbcTemplate,
+            RedisTemplate<String, Object> redisTemplate,
+            @Qualifier(BeanNameConstants.OAUTH2_OBJECT_MAPPER) ObjectMapper objectMapper,
+            RegisteredClientRepository registeredClientRepository
+    ) {
+        super(oauthJdbcTemplate, registeredClientRepository);
+        this.oauthJdbcTemplate = oauthJdbcTemplate;
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
+        this.registeredClientRepository = registeredClientRepository;
+
+        // JdbcOAuth2AuthorizationService Mapper 설정
+        JdbcOAuth2AuthorizationService.OAuth2AuthorizationRowMapper rowMapper =
+                new JdbcOAuth2AuthorizationService.OAuth2AuthorizationRowMapper(registeredClientRepository);
+        rowMapper.setObjectMapper(objectMapper);
+
+        JdbcOAuth2AuthorizationService.OAuth2AuthorizationParametersMapper parametersMapper =
+                new JdbcOAuth2AuthorizationService.OAuth2AuthorizationParametersMapper();
+        parametersMapper.setObjectMapper(objectMapper);
+
+        this.setAuthorizationRowMapper(rowMapper);
+        this.setAuthorizationParametersMapper(parametersMapper);
+    }
 
     @Override
     public void save(OAuth2Authorization authorization) {
         Assert.notNull(authorization, "authorization cannot be null");
-        String json = serialize(authorization);
+        String json = this.serialize(authorization);
         String key = AUTHORIZATION_KEY + authorization.getId();
 
         // 엑세스 토큰 또는 리프레시 토큰의 만료 시간 중 가장 긴 시간을 TTL로 설정
-        long timeout = getTimeout(authorization);
+        long timeout = this.getTimeout(authorization);
         redisTemplate.opsForValue().set(key, json, timeout, TimeUnit.SECONDS);
 
         // 토큰별 인덱스 생성
@@ -63,10 +92,14 @@ public class CustomOAuth2AuthorizationService implements OAuth2AuthorizationServ
         if (deviceCode != null) {
             redisTemplate.opsForValue().set(AUTHORIZATION_KEY + "device_code:" + deviceCode.getToken().getTokenValue(), authorization.getId(), timeout, TimeUnit.SECONDS);
         }
+
+        super.save(authorization);
     }
 
     @Override
     public void remove(OAuth2Authorization authorization) {
+        super.remove(authorization);
+
         Assert.notNull(authorization, "authorization cannot be null");
         String key = AUTHORIZATION_KEY + authorization.getId();
         redisTemplate.delete(key);
@@ -102,7 +135,10 @@ public class CustomOAuth2AuthorizationService implements OAuth2AuthorizationServ
     public OAuth2Authorization findById(String id) {
         Assert.hasText(id, "id cannot be empty");
         String json = (String) redisTemplate.opsForValue().get(AUTHORIZATION_KEY + id);
-        return deserialize(json);
+        if (json == null) {
+            super.findById(id);
+        }
+        return this.deserialize(json);
     }
 
     @Nullable
@@ -111,7 +147,7 @@ public class CustomOAuth2AuthorizationService implements OAuth2AuthorizationServ
         Assert.hasText(token, "token cannot be empty");
         String indexKey;
         if (tokenType == null) {
-            indexKey = findTokenIndex(token);
+            indexKey = this.findTokenIndex(token);
         } else if (OAuth2ParameterNames.STATE.equals(tokenType.getValue())) {
             indexKey = AUTHORIZATION_KEY + "state:" + token;
         } else if (OAuth2ParameterNames.CODE.equals(tokenType.getValue())) {
@@ -133,7 +169,7 @@ public class CustomOAuth2AuthorizationService implements OAuth2AuthorizationServ
         }
 
         String id = (String) redisTemplate.opsForValue().get(indexKey);
-        return id != null ? findById(id) : null;
+        return id != null ? this.findById(id) : null;
     }
 
     private String findTokenIndex(String token) {

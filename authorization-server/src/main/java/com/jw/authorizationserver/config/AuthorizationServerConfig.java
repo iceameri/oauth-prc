@@ -1,5 +1,6 @@
 package com.jw.authorizationserver.config;
 
+import com.jw.authorizationserver.constants.BeanNameConstants;
 import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -178,7 +179,7 @@ public class AuthorizationServerConfig {
     }*/
     @Bean
     public RegisteredClientRepository registeredClientRepository(
-            @Qualifier("oauthJdbcTemplate") JdbcTemplate jdbcTemplate
+            @Qualifier(BeanNameConstants.OAUTH_JDBC_TEMPLATE) JdbcTemplate jdbcTemplate
     ) {
         JdbcRegisteredClientRepository jdbcRegisteredClientRepository = new JdbcRegisteredClientRepository(jdbcTemplate);
 
@@ -233,7 +234,7 @@ public class AuthorizationServerConfig {
         return authorizationService;
     }*/
 
-    @Bean
+    @Bean(name = BeanNameConstants.OAUTH2_OBJECT_MAPPER)
     @Primary
     public ObjectMapper oauth2ObjectMapper() {
         return this.securityObjectMapper();
