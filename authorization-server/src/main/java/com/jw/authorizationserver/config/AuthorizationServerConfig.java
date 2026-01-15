@@ -1,11 +1,11 @@
 package com.jw.authorizationserver.config;
 
-import com.jw.authorizationserver.constants.BeanNameConstants;
 import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jw.authorizationserver.config.userdetails.CustomUserDetails;
 import com.jw.authorizationserver.config.userdetails.CustomUserDetailsService;
+import com.jw.authorizationserver.constants.BeanNameConstants;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,11 +24,12 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.jackson2.SecurityJackson2Modules;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationConsentService;
-import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configurers.OAuth2AuthorizationServerConfigurer;
@@ -183,7 +184,7 @@ public class AuthorizationServerConfig {
     ) {
         JdbcRegisteredClientRepository jdbcRegisteredClientRepository = new JdbcRegisteredClientRepository(jdbcTemplate);
 
-        ObjectMapper objectMapper = this.securityObjectMapper();
+        ObjectMapper objectMapper = this.oauth2ObjectMapper();
 
         // Mapper 적용
         JdbcRegisteredClientRepository.RegisteredClientRowMapper rowMapper =
@@ -237,11 +238,6 @@ public class AuthorizationServerConfig {
     @Bean(name = BeanNameConstants.OAUTH2_OBJECT_MAPPER)
     @Primary
     public ObjectMapper oauth2ObjectMapper() {
-        return this.securityObjectMapper();
-    }
-
-    private ObjectMapper securityObjectMapper() {
-        // ObjectMapper 커스터마이징
         ObjectMapper objectMapper = new ObjectMapper();
 
         // Spring Security 관련 모듈 등록
@@ -251,13 +247,15 @@ public class AuthorizationServerConfig {
         objectMapper.registerModule(new OAuth2AuthorizationServerJackson2Module());
         objectMapper.registerModule(new JavaTimeModule());
 
-        // Boolean, String, etc. 허용할 Mixin 추가
+        //The class with java.lang.Boolean and name of java.lang.Boolean is not in the allowlist. (,,,) 나올때마다 한줄씩 추가
+        //https://github.com/spring-projects/spring-security/issues/4370
         objectMapper.addMixIn(Boolean.class, SynchronizedSetMixin.class);
         objectMapper.addMixIn(String.class, SynchronizedSetMixin.class);
         objectMapper.addMixIn(Integer.class, SynchronizedSetMixin.class);
         objectMapper.addMixIn(Long.class, SynchronizedSetMixin.class);
         objectMapper.addMixIn(OAuth2TokenFormat.class, SynchronizedSetMixin.class);
         objectMapper.addMixIn(CustomUserDetails.class, SynchronizedSetMixin.class);
+        objectMapper.addMixIn(OAuth2Authorization.class, SynchronizedSetMixin.class);
         objectMapper.addMixIn(Collections.synchronizedSet(new HashSet<>()).getClass(), SynchronizedSetMixin.class);
 
         return objectMapper;
