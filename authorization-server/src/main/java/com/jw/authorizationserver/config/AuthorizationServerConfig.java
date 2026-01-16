@@ -24,7 +24,6 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.jackson2.SecurityJackson2Modules;
-import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
@@ -73,17 +72,17 @@ public class AuthorizationServerConfig {
 
         http
                 .securityMatcher(authorizationServerConfigurer.getEndpointsMatcher())
-                 /*OAuth2 인증 서버 설정 포함 (authorize, token, etc.)*/
+                /*OAuth2 인증 서버 설정 포함 (authorize, token, etc.)*/
                 .with(authorizationServerConfigurer, configurer -> {
                             configurer.tokenGenerator(tokenGenerator);
                             configurer.oidc(Customizer.withDefaults()); // OIDC 1.0 활성화
                         }
                 )
-                 /*모든 요청 인증 필요*/
+                /*모든 요청 인증 필요*/
                 .authorizeHttpRequests(authorize -> authorize
                         .anyRequest().authenticated()
                 )
-                 /*인증 실패 시 로그인 페이지로 이동*/
+                /*인증 실패 시 로그인 페이지로 이동*/
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint(new LoginUrlAuthenticationEntryPoint("/login"))
                 )
@@ -234,7 +233,6 @@ public class AuthorizationServerConfig {
 
         return authorizationService;
     }*/
-
     @Bean(name = BeanNameConstants.OAUTH2_OBJECT_MAPPER)
     @Primary
     public ObjectMapper oauth2ObjectMapper() {
@@ -260,6 +258,8 @@ public class AuthorizationServerConfig {
 
         return objectMapper;
     }
+
+
 
     @Bean
     public PasswordEncoder passwordEncoder() {

@@ -3,17 +3,22 @@ package com.jw.authorizationserver.config;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jw.authorizationserver.constants.BeanNameConstants;
+import com.jw.authorizationserver.dto.StoredAuthorization;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
+import org.springframework.security.oauth2.core.*;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
+import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -155,7 +160,13 @@ public class CustomOAuth2AuthorizationService extends JdbcOAuth2AuthorizationSer
         Assert.hasText(id, "id cannot be empty");
         String json = (String) redisTemplate.opsForValue().get(AUTHORIZATION_KEY + id);
         if (json == null) return super.findById(id);
-        return this.deserialize(json);
+
+        try {
+            return this.deserialize(json);
+        } catch (Exception e) {
+            // 역직렬화 실패 시 DB에서 조회 (마이그레이션 또는 구조 변경 대비)
+            return super.findById(id);
+        }
     }
 
     @Nullable
@@ -207,8 +218,9 @@ public class CustomOAuth2AuthorizationService extends JdbcOAuth2AuthorizationSer
     }
 
     private String serialize(OAuth2Authorization authorization) {
+        StoredAuthorization dto = toDto(authorization);
         try {
-            return objectMapper.writeValueAsString(authorization);
+            return objectMapper.writeValueAsString(dto);
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
         }
@@ -217,10 +229,117 @@ public class CustomOAuth2AuthorizationService extends JdbcOAuth2AuthorizationSer
     private OAuth2Authorization deserialize(String json) {
         if (json == null) return null;
         try {
-            return objectMapper.readValue(json, OAuth2Authorization.class);
+            StoredAuthorization dto = objectMapper.readValue(json, StoredAuthorization.class);
+            return this.toEntity(dto);
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private StoredAuthorization toDto(OAuth2Authorization authorization) {
+        StoredAuthorization.StoredAuthorizationBuilder builder = StoredAuthorization.builder()
+                .id(authorization.getId())
+                .registeredClientId(authorization.getRegisteredClientId())
+                .principalName(authorization.getPrincipalName())
+                .authorizationGrantType(authorization.getAuthorizationGrantType().getValue())
+                .authorizedScopes(authorization.getAuthorizedScopes())
+                .attributes(authorization.getAttributes());
+
+        builder.state(authorization.getAttribute(OAuth2ParameterNames.STATE));
+
+        builder.authorizationCode(toDtoToken(authorization.getToken(OAuth2AuthorizationCode.class)));
+        builder.accessToken(toDtoToken(authorization.getAccessToken()));
+        builder.refreshToken(toDtoToken(authorization.getRefreshToken()));
+        builder.userCode(toDtoToken(authorization.getToken(OAuth2UserCode.class)));
+        builder.deviceCode(toDtoToken(authorization.getToken(OAuth2DeviceCode.class)));
+
+        return builder.build();
+    }
+
+    private StoredAuthorization.Token toDtoToken(OAuth2Authorization.Token<? extends OAuth2Token> token) {
+        if (token == null) return null;
+        StoredAuthorization.Token.TokenBuilder builder = StoredAuthorization.Token.builder()
+                .tokenValue(token.getToken().getTokenValue())
+                .issuedAt(token.getToken().getIssuedAt())
+                .expiresAt(token.getToken().getExpiresAt())
+                .metadata(token.getClaims());
+
+        if (token.getToken() instanceof OAuth2AccessToken accessToken) {
+            builder.tokenType(accessToken.getTokenType().getValue());
+            builder.scopes(accessToken.getScopes());
+        }
+
+        return builder.build();
+    }
+
+    private OAuth2Authorization toEntity(StoredAuthorization dto) {
+        RegisteredClient registeredClient = this.registeredClientRepository.findById(dto.registeredClientId());
+        if (registeredClient == null) {
+            throw new RuntimeException("Registered client not found: " + dto.registeredClientId());
+        }
+
+        OAuth2Authorization.Builder builder = OAuth2Authorization.withRegisteredClient(registeredClient)
+                .id(dto.id())
+                .principalName(dto.principalName())
+                .authorizationGrantType(new AuthorizationGrantType(dto.authorizationGrantType()))
+                .authorizedScopes(dto.authorizedScopes())
+                .attributes(attrs -> attrs.putAll(dto.attributes()));
+
+        if (dto.authorizationCode() != null) {
+            builder.token(
+                    toEntityToken(dto.authorizationCode(), OAuth2AuthorizationCode.class),
+                    metadata -> metadata.putAll(dto.authorizationCode().metadata())
+            );
+        }
+        if (dto.accessToken() != null) {
+            builder.token(
+                    toEntityAccessToken(dto.accessToken()),
+                    metadata -> metadata.putAll(dto.accessToken().metadata())
+            );
+        }
+        if (dto.refreshToken() != null) {
+            builder.token(
+                    toEntityToken(dto.refreshToken(), OAuth2RefreshToken.class),
+                    metadata -> metadata.putAll(dto.refreshToken().metadata())
+            );
+        }
+        if (dto.userCode() != null) {
+            builder.token(
+                    toEntityToken(dto.userCode(), OAuth2UserCode.class),
+                    metadata -> metadata.putAll(dto.userCode().metadata())
+            );
+        }
+        if (dto.deviceCode() != null) {
+            builder.token(
+                    toEntityToken(dto.deviceCode(), OAuth2DeviceCode.class),
+                    metadata -> metadata.putAll(dto.deviceCode().metadata())
+            );
+        }
+
+        return builder.build();
+    }
+
+    private <T extends OAuth2Token> T toEntityToken(StoredAuthorization.Token dtoToken, Class<T> tokenClass) {
+        if (dtoToken == null) return null;
+        if (OAuth2AuthorizationCode.class.isAssignableFrom(tokenClass)) {
+            return (T) new OAuth2AuthorizationCode(dtoToken.tokenValue(), dtoToken.issuedAt(), dtoToken.expiresAt());
+        } else if (OAuth2RefreshToken.class.isAssignableFrom(tokenClass)) {
+            return (T) new OAuth2RefreshToken(dtoToken.tokenValue(), dtoToken.issuedAt(), dtoToken.expiresAt());
+        } else if (OAuth2UserCode.class.isAssignableFrom(tokenClass)) {
+            return (T) new OAuth2UserCode(dtoToken.tokenValue(), dtoToken.issuedAt(), dtoToken.expiresAt());
+        } else if (OAuth2DeviceCode.class.isAssignableFrom(tokenClass)) {
+            return (T) new OAuth2DeviceCode(dtoToken.tokenValue(), dtoToken.issuedAt(), dtoToken.expiresAt());
+        }
+        return null;
+    }
+
+    private OAuth2AccessToken toEntityAccessToken(StoredAuthorization.Token dtoToken) {
+        if (dtoToken == null) return null;
+        OAuth2AccessToken.TokenType type = OAuth2AccessToken.TokenType.BEARER;
+        if (StringUtils.hasText(dtoToken.tokenType())) {
+            type = new OAuth2AccessToken.TokenType(dtoToken.tokenType());
+        }
+        return new OAuth2AccessToken(type, dtoToken.tokenValue(), dtoToken.issuedAt(), dtoToken.expiresAt(), dtoToken.scopes());
     }
 
     private long getTimeout(OAuth2Authorization authorization) {
