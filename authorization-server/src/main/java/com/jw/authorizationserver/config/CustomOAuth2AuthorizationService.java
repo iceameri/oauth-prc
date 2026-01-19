@@ -1,15 +1,18 @@
 package com.jw.authorizationserver.config;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jw.authorizationserver.constants.BeanNameConstants;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.lang.Nullable;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.OAuth2DeviceCode;
+import org.springframework.security.oauth2.core.OAuth2Token;
+import org.springframework.security.oauth2.core.OAuth2UserCode;
 import org.springframework.security.oauth2.core.endpoint.OAuth2ParameterNames;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.stereotype.Service;
@@ -20,222 +23,249 @@ import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
 @Service
-public class CustomOAuth2AuthorizationService extends JdbcOAuth2AuthorizationService {//JdbcOAuth2AuthorizationService
+public class CustomOAuth2AuthorizationService extends JdbcOAuth2AuthorizationService {
 
-    private final JdbcTemplate oauthJdbcTemplate;
-    private final RedisTemplate<String, Object> redisTemplate;
-    private final ObjectMapper objectMapper;
-    private final RegisteredClientRepository registeredClientRepository;
+    private static final String PREFIX = "oauth2:auth:";
+    private static final String STATE = "state:";
+    private static final String CODE = "code:";
+    private static final String ACCESS = "access:";
+    private static final String REFRESH = "refresh:";
+    private static final String USER_CODE = "user:";
+    private static final String DEVICE_CODE = "device:";
 
-    private static final String AUTHORIZATION_KEY = "oauth2_authorization:";
-    private static final String STATE_KEY = "state:";
-    private static final String CODE_KEY = "code:";
-    private static final String ACCESS_TOKEN_KEY = "access_token:";
-    private static final String REFRESH_TOKEN_KEY = "refresh_token:";
-    private static final String USER_CODE_KEY = "user_code:";
-    private static final String DEVICE_CODE_KEY = "device_code:";
+    private final RedisTemplate<String, String> redisTemplate;
 
     public CustomOAuth2AuthorizationService(
-            @Qualifier(BeanNameConstants.OAUTH_JDBC_TEMPLATE) JdbcTemplate oauthJdbcTemplate,
-            RedisTemplate<String, Object> redisTemplate,
-            @Qualifier(BeanNameConstants.OAUTH2_OBJECT_MAPPER) ObjectMapper objectMapper,
-            RegisteredClientRepository registeredClientRepository
+            @Qualifier(BeanNameConstants.OAUTH_JDBC_TEMPLATE) JdbcTemplate jdbcTemplate,
+            RegisteredClientRepository registeredClientRepository,
+            RedisTemplate<String, String> redisTemplate
     ) {
-        super(oauthJdbcTemplate, registeredClientRepository);
-        this.oauthJdbcTemplate = oauthJdbcTemplate;
+        super(jdbcTemplate, registeredClientRepository);
         this.redisTemplate = redisTemplate;
-        this.objectMapper = objectMapper;
-        this.registeredClientRepository = registeredClientRepository;
-
-        // JdbcOAuth2AuthorizationService Mapper 설정
-        JdbcOAuth2AuthorizationService.OAuth2AuthorizationRowMapper rowMapper =
-                new JdbcOAuth2AuthorizationService.OAuth2AuthorizationRowMapper(registeredClientRepository);
-        rowMapper.setObjectMapper(objectMapper);
-
-        JdbcOAuth2AuthorizationService.OAuth2AuthorizationParametersMapper parametersMapper =
-                new JdbcOAuth2AuthorizationService.OAuth2AuthorizationParametersMapper();
-        parametersMapper.setObjectMapper(objectMapper);
-
-        this.setAuthorizationRowMapper(rowMapper);
-        this.setAuthorizationParametersMapper(parametersMapper);
     }
 
+    // =========================
+    // Save
+    // =========================
     @Override
     public void save(OAuth2Authorization authorization) {
         Assert.notNull(authorization, "authorization cannot be null");
 
+        // 1️⃣ DB 저장 (부모 로직)
         super.save(authorization);
 
-        String json = this.serialize(authorization);
-        String key = AUTHORIZATION_KEY + authorization.getId();
+        // 2️⃣ 캐시 가능 상태만 Redis 인덱싱
+        if (!this.isCacheable(authorization)) {
+            return;
+        }
 
-        // 엑세스 토큰 또는 리프레시 토큰의 만료 시간 중 가장 긴 시간을 TTL로 설정
-        long timeout = this.getTimeout(authorization);
-        redisTemplate.opsForValue().set(key, json, timeout, TimeUnit.SECONDS);
+        long ttl = this.resolveTtlSeconds(authorization);
+        String id = authorization.getId();
 
-        // 토큰별 인덱스 생성
-        if (authorization.getAttribute(OAuth2ParameterNames.STATE) != null) {
-            String state = authorization.getAttribute(OAuth2ParameterNames.STATE);
-            redisTemplate.opsForValue().set(
-                    AUTHORIZATION_KEY + STATE_KEY + state, authorization.getId(), timeout, TimeUnit.SECONDS
-            );
-        }
-        OAuth2Authorization.Token<org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode> authorizationCode =
-                authorization.getToken(org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode.class);
-        if (authorizationCode != null) {
-            redisTemplate.opsForValue().set(
-                    AUTHORIZATION_KEY + CODE_KEY + authorizationCode.getToken().getTokenValue(), authorization.getId(), timeout, TimeUnit.SECONDS
-            );
-        }
-        if (authorization.getAccessToken() != null) {
-            String accessToken = authorization.getAccessToken().getToken().getTokenValue();
-            redisTemplate.opsForValue().set(
-                    AUTHORIZATION_KEY + ACCESS_TOKEN_KEY + accessToken, authorization.getId(), timeout, TimeUnit.SECONDS
-            );
-        }
-        if (authorization.getRefreshToken() != null) {
-            String refreshToken = authorization.getRefreshToken().getToken().getTokenValue();
-            redisTemplate.opsForValue().set(
-                    AUTHORIZATION_KEY + REFRESH_TOKEN_KEY + refreshToken, authorization.getId(), timeout, TimeUnit.SECONDS
-            );
-        }
-        OAuth2Authorization.Token<org.springframework.security.oauth2.core.OAuth2UserCode> userCode =
-                authorization.getToken(org.springframework.security.oauth2.core.OAuth2UserCode.class);
-        if (userCode != null) {
-            redisTemplate.opsForValue().set(
-                    AUTHORIZATION_KEY + USER_CODE_KEY + userCode.getToken().getTokenValue(), authorization.getId(), timeout, TimeUnit.SECONDS
-            );
-        }
-        OAuth2Authorization.Token<org.springframework.security.oauth2.core.OAuth2DeviceCode> deviceCode =
-                authorization.getToken(org.springframework.security.oauth2.core.OAuth2DeviceCode.class);
-        if (deviceCode != null) {
-            redisTemplate.opsForValue().set(
-                    AUTHORIZATION_KEY + DEVICE_CODE_KEY + deviceCode.getToken().getTokenValue(), authorization.getId(), timeout, TimeUnit.SECONDS
-            );
-        }
+        this.cacheIndex(STATE,
+                authorization.getAttribute(OAuth2ParameterNames.STATE),
+                id, ttl);
+
+        this.cacheToken(CODE,
+                authorization.getToken(OAuth2AuthorizationCode.class),
+                id, ttl);
+
+        this.cacheAccessToken(authorization, id, ttl);
+        this.cacheRefreshToken(authorization, id, ttl);
+
+        this.cacheToken(USER_CODE,
+                authorization.getToken(OAuth2UserCode.class),
+                id, ttl);
+
+        this.cacheToken(DEVICE_CODE,
+                authorization.getToken(OAuth2DeviceCode.class),
+                id, ttl);
     }
 
+    // =========================
+    // Remove
+    // =========================
     @Override
     public void remove(OAuth2Authorization authorization) {
         Assert.notNull(authorization, "authorization cannot be null");
-        String key = AUTHORIZATION_KEY + authorization.getId();
-        redisTemplate.delete(key);
 
-        if (authorization.getAttribute(OAuth2ParameterNames.STATE) != null) {
-            redisTemplate.delete(AUTHORIZATION_KEY + STATE_KEY + (String) authorization.getAttribute(OAuth2ParameterNames.STATE));
-        }
-        OAuth2Authorization.Token<org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode> authorizationCode =
-                authorization.getToken(org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationCode.class);
-        if (authorizationCode != null) {
-            redisTemplate.delete(AUTHORIZATION_KEY + CODE_KEY + authorizationCode.getToken().getTokenValue());
-        }
-        if (authorization.getAccessToken() != null) {
-            redisTemplate.delete(AUTHORIZATION_KEY + ACCESS_TOKEN_KEY + authorization.getAccessToken().getToken().getTokenValue());
-        }
-        if (authorization.getRefreshToken() != null) {
-            redisTemplate.delete(AUTHORIZATION_KEY + REFRESH_TOKEN_KEY + authorization.getRefreshToken().getToken().getTokenValue());
-        }
-        OAuth2Authorization.Token<org.springframework.security.oauth2.core.OAuth2UserCode> userCode =
-                authorization.getToken(org.springframework.security.oauth2.core.OAuth2UserCode.class);
-        if (userCode != null) {
-            redisTemplate.delete(AUTHORIZATION_KEY + USER_CODE_KEY + userCode.getToken().getTokenValue());
-        }
-        OAuth2Authorization.Token<org.springframework.security.oauth2.core.OAuth2DeviceCode> deviceCode =
-                authorization.getToken(org.springframework.security.oauth2.core.OAuth2DeviceCode.class);
-        if (deviceCode != null) {
-            redisTemplate.delete(AUTHORIZATION_KEY + DEVICE_CODE_KEY + deviceCode.getToken().getTokenValue());
-        }
+        this.deleteIndex(STATE,
+                authorization.getAttribute(OAuth2ParameterNames.STATE));
+
+        this.deleteToken(CODE,
+                authorization.getToken(OAuth2AuthorizationCode.class));
+
+        this.deleteAccessToken(authorization);
+        this.deleteRefreshToken(authorization);
+
+        this.deleteToken(USER_CODE,
+                authorization.getToken(OAuth2UserCode.class));
+
+        this.deleteToken(DEVICE_CODE,
+                authorization.getToken(OAuth2DeviceCode.class));
 
         super.remove(authorization);
     }
 
-    @Nullable
+    // =========================
+    // Find
+    // =========================
     @Override
-    public OAuth2Authorization findById(String id) {
-        Assert.hasText(id, "id cannot be empty");
-        String json = (String) redisTemplate.opsForValue().get(AUTHORIZATION_KEY + id);
-        if (json == null) return super.findById(id);
-        return this.deserialize(json);
-    }
-
     @Nullable
-    @Override
     public OAuth2Authorization findByToken(String token, @Nullable OAuth2TokenType tokenType) {
         Assert.hasText(token, "token cannot be empty");
-        String indexKey;
-        if (tokenType == null) {
-            indexKey = this.findTokenIndex(token);
-        } else if (OAuth2ParameterNames.STATE.equals(tokenType.getValue())) {
-            indexKey = AUTHORIZATION_KEY + STATE_KEY + token;
-        } else if (OAuth2ParameterNames.CODE.equals(tokenType.getValue())) {
-            indexKey = AUTHORIZATION_KEY + CODE_KEY + token;
-        } else if (OAuth2TokenType.ACCESS_TOKEN.equals(tokenType)) {
-            indexKey = AUTHORIZATION_KEY + ACCESS_TOKEN_KEY + token;
-        } else if (OAuth2TokenType.REFRESH_TOKEN.equals(tokenType)) {
-            indexKey = AUTHORIZATION_KEY + REFRESH_TOKEN_KEY + token;
-        } else if (OAuth2ParameterNames.USER_CODE.equals(tokenType.getValue())) {
-            indexKey = AUTHORIZATION_KEY + USER_CODE_KEY + token;
-        } else if (OAuth2ParameterNames.DEVICE_CODE.equals(tokenType.getValue())) {
-            indexKey = AUTHORIZATION_KEY + DEVICE_CODE_KEY + token;
-        } else {
-            return super.findByToken(token, tokenType);
-        }
 
-        if (indexKey != null) {
-            String id = (String) redisTemplate.opsForValue().get(indexKey);
+        String key = resolveKey(token, tokenType);
+        if (key != null) {
+            String id = redisTemplate.opsForValue().get(key);
             if (id != null) {
-                OAuth2Authorization authorization = this.findById(id);
+                OAuth2Authorization authorization = super.findById(id);
                 if (authorization != null) {
                     return authorization;
                 }
             }
         }
-
-        // Redis 미히트 또는 id는 있으나 실제 데이터가 없는 경우 DB 조회
         return super.findByToken(token, tokenType);
     }
 
-    private String findTokenIndex(String token) {
-        String[] types = {CODE_KEY, ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, STATE_KEY, USER_CODE_KEY, DEVICE_CODE_KEY};
-        for (String type : types) {
-            String id = (String) redisTemplate.opsForValue().get(AUTHORIZATION_KEY + type + token);
-            if (id != null) {
-                return AUTHORIZATION_KEY + type + token;
-            }
+    // =========================
+    // Cache rules
+    // =========================
+    private boolean isCacheable(OAuth2Authorization authorization) {
+        AuthorizationGrantType grantType = authorization.getAuthorizationGrantType();
+
+        if (AuthorizationGrantType.AUTHORIZATION_CODE.equals(grantType)) {
+            return authorization.getToken(OAuth2AuthorizationCode.class) != null
+                    || authorization.getAccessToken() != null;
+        }
+        return authorization.getAccessToken() != null;
+    }
+
+    private long resolveTtlSeconds(OAuth2Authorization authorization) {
+        Instant now = Instant.now();
+        Instant expires = now.plus(Duration.ofHours(1));
+
+        if (authorization.getAccessToken() != null &&
+                authorization.getAccessToken().getToken().getExpiresAt() != null) {
+            expires = authorization.getAccessToken().getToken().getExpiresAt();
+        }
+        if (authorization.getRefreshToken() != null &&
+                authorization.getRefreshToken().getToken().getExpiresAt() != null &&
+                authorization.getRefreshToken().getToken().getExpiresAt().isAfter(expires)) {
+            expires = authorization.getRefreshToken().getToken().getExpiresAt();
+        }
+
+        return Math.max(Duration.between(now, expires).getSeconds(), 3600);
+    }
+
+    // =========================
+    // Redis helpers
+    // =========================
+    private void cacheIndex(String prefix, String value, String id, long ttl) {
+        if (value != null) {
+            redisTemplate.opsForValue().set(
+                    PREFIX + prefix + value,
+                    id,
+                    ttl,
+                    TimeUnit.SECONDS
+            );
+        }
+    }
+
+    private <T extends OAuth2Token> void cacheToken(
+            String prefix,
+            OAuth2Authorization.Token<T> token,
+            String id,
+            long ttl
+    ) {
+        if (token != null && token.getToken() != null) {
+            redisTemplate.opsForValue().set(
+                    PREFIX + prefix + token.getToken().getTokenValue(),
+                    id,
+                    ttl,
+                    TimeUnit.SECONDS
+            );
+        }
+    }
+
+    private void cacheAccessToken(OAuth2Authorization authorization, String id, long ttl) {
+        if (authorization.getAccessToken() != null) {
+            redisTemplate.opsForValue().set(
+                    PREFIX + ACCESS + authorization.getAccessToken().getToken().getTokenValue(),
+                    id,
+                    ttl,
+                    TimeUnit.SECONDS
+            );
+        }
+    }
+
+    private void cacheRefreshToken(OAuth2Authorization authorization, String id, long ttl) {
+        if (authorization.getRefreshToken() != null) {
+            redisTemplate.opsForValue().set(
+                    PREFIX + REFRESH + authorization.getRefreshToken().getToken().getTokenValue(),
+                    id,
+                    ttl,
+                    TimeUnit.SECONDS
+            );
+        }
+    }
+
+    private void deleteIndex(String prefix, String value) {
+        if (value != null) {
+            redisTemplate.delete(PREFIX + prefix + value);
+        }
+    }
+
+    private <T extends OAuth2Token> void deleteToken(
+            String prefix,
+            OAuth2Authorization.Token<T> token
+    ) {
+        if (token != null && token.getToken() != null) {
+            redisTemplate.delete(
+                    PREFIX + prefix + token.getToken().getTokenValue()
+            );
+        }
+    }
+
+    private void deleteAccessToken(OAuth2Authorization authorization) {
+        if (authorization.getAccessToken() != null) {
+            redisTemplate.delete(
+                    PREFIX + ACCESS +
+                            authorization.getAccessToken().getToken().getTokenValue()
+            );
+        }
+    }
+
+    private void deleteRefreshToken(OAuth2Authorization authorization) {
+        if (authorization.getRefreshToken() != null) {
+            redisTemplate.delete(
+                    PREFIX + REFRESH +
+                            authorization.getRefreshToken().getToken().getTokenValue()
+            );
+        }
+    }
+
+    private String resolveKey(String token, OAuth2TokenType tokenType) {
+        if (tokenType == null) return null;
+
+        if (OAuth2ParameterNames.STATE.equals(tokenType.getValue())) {
+            return PREFIX + STATE + token;
+        }
+        if (OAuth2ParameterNames.CODE.equals(tokenType.getValue())) {
+            return PREFIX + CODE + token;
+        }
+        if (OAuth2TokenType.ACCESS_TOKEN.equals(tokenType)) {
+            return PREFIX + ACCESS + token;
+        }
+        if (OAuth2TokenType.REFRESH_TOKEN.equals(tokenType)) {
+            return PREFIX + REFRESH + token;
+        }
+        if (OAuth2ParameterNames.USER_CODE.equals(tokenType.getValue())) {
+            return PREFIX + USER_CODE + token;
+        }
+        if (OAuth2ParameterNames.DEVICE_CODE.equals(tokenType.getValue())) {
+            return PREFIX + DEVICE_CODE + token;
         }
         return null;
-    }
-
-    private String serialize(OAuth2Authorization authorization) {
-        try {
-            return objectMapper.writeValueAsString(authorization);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private OAuth2Authorization deserialize(String json) {
-        if (json == null) return null;
-        try {
-            return objectMapper.readValue(json, OAuth2Authorization.class);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private long getTimeout(OAuth2Authorization authorization) {
-        Instant expiresAt = Instant.now().plus(Duration.ofDays(1)); // 기본 1일
-
-        if (authorization.getAccessToken() != null && authorization.getAccessToken().getToken().getExpiresAt() != null) {
-            expiresAt = authorization.getAccessToken().getToken().getExpiresAt();
-        }
-        if (authorization.getRefreshToken() != null && authorization.getRefreshToken().getToken().getExpiresAt() != null) {
-            Instant refreshExpiresAt = authorization.getRefreshToken().getToken().getExpiresAt();
-            if (refreshExpiresAt.isAfter(expiresAt)) {
-                expiresAt = refreshExpiresAt;
-            }
-        }
-
-        return Math.max(Duration.between(Instant.now(), expiresAt).getSeconds(), 3600); // 최소 1시간 유지
     }
 }
